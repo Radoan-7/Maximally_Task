@@ -1,7 +1,7 @@
 const fetch = require("node-fetch");
 const cheerio = require("cheerio");
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
+const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
 // cache object to reduce API calls
 let cache = { ts: 0, data: null };

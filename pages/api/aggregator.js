@@ -1,5 +1,4 @@
-const fetch = require("node-fetch");
-const cheerio = require("cheerio");
+import cheerio from "cheerio";
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
@@ -16,10 +15,7 @@ async function fetchUnstop() {
     Accept: "application/xml,text/xml;q=0.9,*/*;q=0.8",
   };
 
-  const sitemapUrls = Array.from(
-    { length: MAX_SITEMAPS },
-    (_, i) => `${base}${i + 1}.xml`
-  );
+  const sitemapUrls = Array.from({ length: MAX_SITEMAPS }, (_, i) => `${base}${i + 1}.xml`);
   const items = [];
 
   for (const url of sitemapUrls) {
@@ -38,9 +34,7 @@ async function fetchUnstop() {
         if (!loc || !/\/hackathons\//i.test(loc)) return;
 
         const lastmod = $(el).find("lastmod").text().trim();
-        const title = slugToTitle(
-          (loc.split("/hackathons/")[1] || "").split("/")[0]
-        );
+        const title = slugToTitle((loc.split("/hackathons/")[1] || "").split("/")[0]);
 
         items.push({
           source: "unstop",
@@ -56,13 +50,11 @@ async function fetchUnstop() {
     }
   }
 
-  // Deduplicate by link
   const map = new Map();
   for (const it of items) if (!map.has(it.link)) map.set(it.link, it);
   const out = Array.from(map.values());
-
-  // Sort by last modified
   out.sort((a, b) => new Date(b.tags[0] || 0) - new Date(a.tags[0] || 0));
+
   console.log(`Unstop fetched: ${out.length} hackathons`);
   return out;
 }
@@ -83,7 +75,6 @@ async function fetchGithubHackathons() {
   );
   const url = `https://api.github.com/search/repositories?q=${q}&sort=updated&order=desc&per_page=30`;
   const headers = { "User-Agent": "hackathon-aggregator" };
-
   if (GITHUB_TOKEN) headers.Authorization = `token ${GITHUB_TOKEN}`;
 
   try {
@@ -95,7 +86,6 @@ async function fetchGithubHackathons() {
 
     const json = await res.json();
     const items = json.items || [];
-
     const mapped = items.map((it) => ({
       source: "github",
       title: it.full_name,
@@ -119,21 +109,17 @@ function getDateNDaysAgo(n) {
   return d.toISOString().slice(0, 10);
 }
 
-// --- Prize parser ---
 function parsePrize(prizeText) {
   if (!prizeText) return 0;
-
   let txt = prizeText.toUpperCase().replace(/[,₹£€$]/g, "").trim();
-
   if (/(\d+)\s*K/.test(txt)) return parseInt(RegExp.$1, 10) * 1000;
   if (/(\d+)\s*L/.test(txt)) return parseInt(RegExp.$1, 10) * 100000;
-
   const match = txt.match(/(\d{2,})/);
   return match ? Number(match[1]) : 0;
 }
 
 // --- Main API handler ---
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   try {
     const { source = "all", filter = "", minPrize = 0 } = req.query;
 
@@ -188,4 +174,4 @@ module.exports = async (req, res) => {
     console.error("Hackathon API error:", err);
     res.status(500).json({ ok: false, error: String(err) });
   }
-};
+}

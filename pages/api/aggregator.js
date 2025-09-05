@@ -3,7 +3,7 @@ const cheerio = require("cheerio");
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 
-// cache object to reduce API calls
+// Cache to reduce API calls
 let cache = { ts: 0, data: null };
 const CACHE_TTL = 1000 * 60 * 5; // 5 minutes
 
@@ -25,7 +25,10 @@ async function fetchUnstop() {
   for (const url of sitemapUrls) {
     try {
       const res = await fetch(url, { headers });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        console.error(`Failed to fetch ${url}: ${res.status}`);
+        continue;
+      }
 
       const xml = await res.text();
       const $ = cheerio.load(xml, { xmlMode: true });
@@ -45,7 +48,7 @@ async function fetchUnstop() {
           link: loc,
           description: "",
           tags: [lastmod].filter(Boolean),
-          prizeText: "", // sitemap doesn’t provide prize
+          prizeText: "",
         });
       });
     } catch (e) {
@@ -53,13 +56,14 @@ async function fetchUnstop() {
     }
   }
 
-  // deduplicate by link
+  // Deduplicate by link
   const map = new Map();
   for (const it of items) if (!map.has(it.link)) map.set(it.link, it);
   const out = Array.from(map.values());
 
-  // sort by last modified
+  // Sort by last modified
   out.sort((a, b) => new Date(b.tags[0] || 0) - new Date(a.tags[0] || 0));
+  console.log(`Unstop fetched: ${out.length} hackathons`);
   return out;
 }
 
@@ -77,26 +81,36 @@ async function fetchGithubHackathons() {
   const q = encodeURIComponent(
     "hackathon in:name,description pushed:>=" + getDateNDaysAgo(365)
   );
-
   const url = `https://api.github.com/search/repositories?q=${q}&sort=updated&order=desc&per_page=30`;
   const headers = { "User-Agent": "hackathon-aggregator" };
 
   if (GITHUB_TOKEN) headers.Authorization = `token ${GITHUB_TOKEN}`;
 
-  const res = await fetch(url, { headers });
-  if (!res.ok) return [];
+  try {
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      console.error("GitHub API error:", res.status, await res.text());
+      return [];
+    }
 
-  const json = await res.json();
-  const items = json.items || [];
+    const json = await res.json();
+    const items = json.items || [];
 
-  return items.map((it) => ({
-    source: "github",
-    title: it.full_name,
-    link: it.html_url,
-    description: it.description || "",
-    tags: it.topics || [],
-    prizeText: "", // repos don’t have prizes
-  }));
+    const mapped = items.map((it) => ({
+      source: "github",
+      title: it.full_name,
+      link: it.html_url,
+      description: it.description || "",
+      tags: it.topics || [],
+      prizeText: "",
+    }));
+
+    console.log(`GitHub fetched: ${mapped.length} hackathons`);
+    return mapped;
+  } catch (e) {
+    console.error("GitHub fetch error:", e);
+    return [];
+  }
 }
 
 function getDateNDaysAgo(n) {
@@ -111,13 +125,8 @@ function parsePrize(prizeText) {
 
   let txt = prizeText.toUpperCase().replace(/[,₹£€$]/g, "").trim();
 
-  // Handle "10K", "5K", "2L" (lakhs), etc.
-  if (/(\d+)\s*K/.test(txt)) {
-    return parseInt(RegExp.$1, 10) * 1000;
-  }
-  if (/(\d+)\s*L/.test(txt)) {
-    return parseInt(RegExp.$1, 10) * 100000;
-  }
+  if (/(\d+)\s*K/.test(txt)) return parseInt(RegExp.$1, 10) * 1000;
+  if (/(\d+)\s*L/.test(txt)) return parseInt(RegExp.$1, 10) * 100000;
 
   const match = txt.match(/(\d{2,})/);
   return match ? Number(match[1]) : 0;
@@ -130,6 +139,7 @@ module.exports = async (req, res) => {
 
     const now = Date.now();
     if (!cache.data || now - cache.ts > CACHE_TTL) {
+      console.log("Cache expired or empty. Fetching hackathons...");
       const [unstop, github] = await Promise.allSettled([
         fetchUnstop(),
         fetchGithubHackathons(),
@@ -145,12 +155,10 @@ module.exports = async (req, res) => {
     }
 
     let combined = [];
-    if (source === "unstop" || source === "all")
-      combined = combined.concat(cache.data.unstop);
-    if (source === "github" || source === "all")
-      combined = combined.concat(cache.data.github);
+    if (source === "unstop" || source === "all") combined = combined.concat(cache.data.unstop);
+    if (source === "github" || source === "all") combined = combined.concat(cache.data.github);
 
-    // --- Keyword filter ---
+    // Keyword filter
     const f = filter.toLowerCase();
     if (f) {
       combined = combined.filter((item) => {
@@ -162,14 +170,13 @@ module.exports = async (req, res) => {
           (item.tags || []).join(" ")
         ).toLowerCase();
 
-        if (f === "ai")
-          return text.includes("ai") || text.includes("machine learning");
+        if (f === "ai") return text.includes("ai") || text.includes("machine learning");
         if (f === "student") return text.includes("student");
         return text.includes(f);
       });
     }
 
-    // --- Prize filter ---
+    // Prize filter
     const minP = Number(minPrize || 0);
     if (minP > 0) {
       combined = combined.filter((item) => parsePrize(item.prizeText) >= minP);

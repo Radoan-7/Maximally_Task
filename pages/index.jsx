@@ -32,13 +32,13 @@ export default function Home() {
     <div style={{ fontFamily: "Inter, system-ui", padding: 20, maxWidth: 900, margin: "0 auto" }}>
       <h1>Hackathon Aggregator</h1>
       <p style={{ color: "#666" }}>
-        Finds ongoing hackathons from Devpost and GitHub. Use the filters below.
+        Finds ongoing hackathons from <b>Unstop</b> and GitHub. Use the filters below.
       </p>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <select value={source} onChange={(e) => setSource(e.target.value)}>
           <option value="all">All sources</option>
-          <option value="devpost">Devpost only</option>
+          <option value="unstop">Unstop only</option>
           <option value="github">GitHub only</option>
         </select>
 
@@ -81,9 +81,7 @@ export default function Home() {
         ))}
       </div>
 
-      <footer style={{ marginTop: 24, color: "#888" }}>
-        Tip: Add <code>GITHUB_TOKEN</code> in Vercel env settings to avoid GitHub rate limits.
-      </footer>
+      
     </div>
   );
 }

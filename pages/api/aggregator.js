@@ -7,48 +7,72 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN || null;
 let cache = { ts: 0, data: null };
 const CACHE_TTL = 1000 * 60 * 5; // 5 minutes
 
-// --- Fetch hackathons from Devpost ---
-async function fetchDevpost() {
-  const url = "https://devpost.com/hackathons";
-  const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-  const html = await res.text();
-  const $ = cheerio.load(html);
-  const cards = [];
+// --- Fetch hackathons from Unstop ---
+async function fetchUnstop() {
+  const MAX_SITEMAPS = 12;
+  const base = "https://unstop.com/sitemaps/opportunity/sitemap";
+  const headers = {
+    "User-Agent": "Mozilla/5.0",
+    Accept: "application/xml,text/xml;q=0.9,*/*;q=0.8",
+  };
 
-  $(".hackathon-tile, .project-card").each((i, el) => {
-    const title =
-      $(el).find("h3, .title, .block-title").first().text().trim() ||
-      $(el).find("a").first().text().trim();
+  const sitemapUrls = Array.from(
+    { length: MAX_SITEMAPS },
+    (_, i) => `${base}${i + 1}.xml`
+  );
+  const items = [];
 
-    const link = $(el).find("a").first().attr("href");
-    const href = link?.startsWith("http")
-      ? link
-      : `https://devpost.com${link || ""}`;
+  for (const url of sitemapUrls) {
+    try {
+      const res = await fetch(url, { headers });
+      if (!res.ok) continue;
 
-    const desc = $(el).find(".blurb, .description, p").first().text().trim();
+      const xml = await res.text();
+      const $ = cheerio.load(xml, { xmlMode: true });
 
-    const tags = [];
-    $(el)
-      .find(".tags a, .tag")
-      .each((_, t) => tags.push($(t).text().trim()));
+      $("url").each((_, el) => {
+        const loc = $(el).find("loc").text().trim();
+        if (!loc || !/\/hackathons\//i.test(loc)) return;
 
-    const prizeText =
-      $(el).find(".prize, .prizes, .category-list").text().trim() || "";
+        const lastmod = $(el).find("lastmod").text().trim();
+        const title = slugToTitle(
+          (loc.split("/hackathons/")[1] || "").split("/")[0]
+        );
 
-    cards.push({
-      source: "devpost",
-      title: title || "Untitled",
-      link: href,
-      description: desc || "",
-      tags,
-      prizeText,
-    });
-  });
+        items.push({
+          source: "unstop",
+          title: title || "Untitled",
+          link: loc,
+          description: "",
+          tags: [lastmod].filter(Boolean),
+          prizeText: "", // sitemap doesn’t provide prize
+        });
+      });
+    } catch (e) {
+      console.error("Unstop fetch error:", e);
+    }
+  }
 
-  return cards;
+  // deduplicate by link
+  const map = new Map();
+  for (const it of items) if (!map.has(it.link)) map.set(it.link, it);
+  const out = Array.from(map.values());
+
+  // sort by last modified
+  out.sort((a, b) => new Date(b.tags[0] || 0) - new Date(a.tags[0] || 0));
+  return out;
 }
 
-// --- Fetch hackathons from GitHub repos ---
+function slugToTitle(slug) {
+  if (!slug) return "";
+  const cleaned = slug.replace(/-\d+$/, "");
+  return cleaned
+    .split("-")
+    .map((s) => (s ? s[0].toUpperCase() + s.slice(1) : ""))
+    .join(" ");
+}
+
+// --- Fetch hackathons from GitHub ---
 async function fetchGithubHackathons() {
   const q = encodeURIComponent(
     "hackathon in:name,description pushed:>=" + getDateNDaysAgo(365)
@@ -57,9 +81,7 @@ async function fetchGithubHackathons() {
   const url = `https://api.github.com/search/repositories?q=${q}&sort=updated&order=desc&per_page=30`;
   const headers = { "User-Agent": "hackathon-aggregator" };
 
-  if (GITHUB_TOKEN) {
-    headers.Authorization = `token ${GITHUB_TOKEN}`;
-  }
+  if (GITHUB_TOKEN) headers.Authorization = `token ${GITHUB_TOKEN}`;
 
   const res = await fetch(url, { headers });
   if (!res.ok) return [];
@@ -73,15 +95,32 @@ async function fetchGithubHackathons() {
     link: it.html_url,
     description: it.description || "",
     tags: it.topics || [],
-    prizeText: "",
+    prizeText: "", // repos don’t have prizes
   }));
 }
 
-// --- Helper: Get date N days ago (for GitHub search) ---
 function getDateNDaysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
+}
+
+// --- Prize parser ---
+function parsePrize(prizeText) {
+  if (!prizeText) return 0;
+
+  let txt = prizeText.toUpperCase().replace(/[,₹£€$]/g, "").trim();
+
+  // Handle "10K", "5K", "2L" (lakhs), etc.
+  if (/(\d+)\s*K/.test(txt)) {
+    return parseInt(RegExp.$1, 10) * 1000;
+  }
+  if (/(\d+)\s*L/.test(txt)) {
+    return parseInt(RegExp.$1, 10) * 100000;
+  }
+
+  const match = txt.match(/(\d{2,})/);
+  return match ? Number(match[1]) : 0;
 }
 
 // --- Main API handler ---
@@ -91,29 +130,27 @@ module.exports = async (req, res) => {
 
     const now = Date.now();
     if (!cache.data || now - cache.ts > CACHE_TTL) {
-      const [devpost, github] = await Promise.allSettled([
-        fetchDevpost(),
+      const [unstop, github] = await Promise.allSettled([
+        fetchUnstop(),
         fetchGithubHackathons(),
       ]);
 
       cache = {
         ts: Date.now(),
         data: {
-          dev: devpost.status === "fulfilled" ? devpost.value : [],
-          gh: github.status === "fulfilled" ? github.value : [],
+          unstop: unstop.status === "fulfilled" ? unstop.value : [],
+          github: github.status === "fulfilled" ? github.value : [],
         },
       };
     }
 
     let combined = [];
-    if (source === "devpost" || source === "all") {
-      combined = combined.concat(cache.data.dev);
-    }
-    if (source === "github" || source === "all") {
-      combined = combined.concat(cache.data.gh);
-    }
+    if (source === "unstop" || source === "all")
+      combined = combined.concat(cache.data.unstop);
+    if (source === "github" || source === "all")
+      combined = combined.concat(cache.data.github);
 
-    // --- Filtering logic ---
+    // --- Keyword filter ---
     const f = filter.toLowerCase();
     if (f) {
       combined = combined.filter((item) => {
@@ -125,7 +162,8 @@ module.exports = async (req, res) => {
           (item.tags || []).join(" ")
         ).toLowerCase();
 
-        if (f === "ai") return text.includes("ai") || text.includes("machine learning");
+        if (f === "ai")
+          return text.includes("ai") || text.includes("machine learning");
         if (f === "student") return text.includes("student");
         return text.includes(f);
       });
@@ -134,11 +172,7 @@ module.exports = async (req, res) => {
     // --- Prize filter ---
     const minP = Number(minPrize || 0);
     if (minP > 0) {
-      combined = combined.filter((item) => {
-        const clean = (item.prizeText || "").replace(/[,$₹£€]/g, "");
-        const match = clean.match(/(\d{2,})/);
-        return match ? Number(match[1]) >= minP : false;
-      });
+      combined = combined.filter((item) => parsePrize(item.prizeText) >= minP);
     }
 
     res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=120");

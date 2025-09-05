@@ -12,21 +12,23 @@ export default function Home() {
     const qs = new URLSearchParams();
     if (source) qs.set("source", source);
     if (filter) qs.set("filter", filter);
-    if (minPrize) qs.set("minPrize", minPrize);
+    if (minPrize) qs.set("minPrize", Number(minPrize));
+
     try {
       const res = await fetch(`/api/aggregator?${qs.toString()}`);
       const json = await res.json();
       setItems(json.ok ? json.data : []);
     } catch (e) {
-      console.error(e);
+      console.error("Failed to fetch hackathons:", e);
       setItems([]);
     }
     setLoading(false);
   }
 
+  // Initial load and reload when filters change
   useEffect(() => {
     load();
-  }, []);
+  }, [source, filter, minPrize]);
 
   return (
     <div style={{ fontFamily: "Inter, system-ui", padding: 20, maxWidth: 900, margin: "0 auto" }}>
@@ -35,6 +37,7 @@ export default function Home() {
         Finds ongoing hackathons from <b>Unstop</b> and GitHub. Use the filters below.
       </p>
 
+      {/* Filters */}
       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
         <select value={source} onChange={(e) => setSource(e.target.value)}>
           <option value="all">All sources</option>
@@ -50,6 +53,7 @@ export default function Home() {
 
         <input
           placeholder="Min prize ($)"
+          type="number"
           value={minPrize}
           onChange={(e) => setMinPrize(e.target.value)}
         />
@@ -57,15 +61,30 @@ export default function Home() {
         <button onClick={load}>Refresh</button>
       </div>
 
-      {loading && <p>Loading…</p>}
+      {/* Loading indicator */}
+      {loading && <p>Loading hackathons…</p>}
 
+      {/* Hackathon list */}
       <div>
-        {items.length === 0 && !loading && <p>No hackathons found. Try Refresh.</p>}
+        {!loading && items.length === 0 && <p>No hackathons found. Try Refresh.</p>}
         {items.map((it, idx) => (
-          <div key={idx} style={{ border: "1px solid #eee", padding: 12, marginBottom: 8, borderRadius: 8 }}>
+          <div
+            key={idx}
+            style={{
+              border: "1px solid #eee",
+              padding: 12,
+              marginBottom: 8,
+              borderRadius: 8,
+            }}
+          >
             <div style={{ display: "flex", justifyContent: "space-between" }}>
               <div>
-                <a href={it.link} target="_blank" rel="noreferrer" style={{ fontSize: 16, fontWeight: 600 }}>
+                <a
+                  href={it.link}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ fontSize: 16, fontWeight: 600 }}
+                >
                   {it.title}
                 </a>
                 <div style={{ fontSize: 13, color: "#666" }}>
@@ -80,8 +99,6 @@ export default function Home() {
           </div>
         ))}
       </div>
-
-      
     </div>
   );
 }
